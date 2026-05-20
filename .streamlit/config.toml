@@ -1,0 +1,14 @@
+[theme]
+# Blush + charcoal + ivory palette
+primaryColor = "#C18A82"
+backgroundColor = "#FBF7F4"
+secondaryBackgroundColor = "#F5EBE6"
+textColor = "#2C2826"
+font = "serif"
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = true
+
+[browser]
+gatherUsageStats = false

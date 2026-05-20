@@ -1,0 +1,9 @@
+streamlit>=1.40.0
+# Pinned <2.15 to avoid storage3 pulling in pyiceberg (needs C++ build tools on Win)
+supabase>=2.9.0,<2.15.0
+anthropic>=0.42.0
+python-dotenv>=1.0.1
+pandas>=2.2.0
+pypdf>=5.1.0
+pillow>=11.0.0
+reportlab>=4.2.0

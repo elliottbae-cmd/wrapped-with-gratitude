@@ -49,6 +49,7 @@ class Config:
     supabase_anon_key: str
     anthropic_api_key: str
     business_name: str
+    business_owner_name: str
     business_venmo_handle: str
     business_email: str
     business_phone: str
@@ -64,6 +65,7 @@ def load() -> Config:
         supabase_anon_key=_required("SUPABASE_ANON_KEY"),
         anthropic_api_key=_required("ANTHROPIC_API_KEY"),
         business_name=_read("BUSINESS_NAME", "Wrapped with Gratitude"),
+        business_owner_name=_read("BUSINESS_OWNER_NAME", "Owner"),
         business_venmo_handle=_read("BUSINESS_VENMO_HANDLE"),
         business_email=_read("BUSINESS_EMAIL"),
         business_phone=_read("BUSINESS_PHONE"),

@@ -125,11 +125,22 @@ with r2c2:
 
 st.markdown("&nbsp;")
 
+# ---- Admin: Reports card ----
+if admin:
+    with st.container(border=True):
+        st.markdown("### 📊 Reports")
+        st.caption(
+            "P&L, balance sheet, cash flow, and top-selling items — "
+            "filtered by period (this month, QTD, YTD, custom)."
+        )
+        st.page_link("pages/6_Reports.py", label="Open reports →")
+    st.markdown("&nbsp;")
+
 # Coming-soon panel
 with st.container(border=True):
     st.markdown("##### Coming next")
     st.caption(
-        "• Balance sheet & P&L reports (admin)  \n"
         "• Customer email campaigns (SendGrid)  \n"
-        "• Instagram integration (DMs + auto captions)"
+        "• Instagram integration (DMs + auto captions)  \n"
+        "• Vendor AP tracking (to sharpen the cash picture)"
     )

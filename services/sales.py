@@ -52,11 +52,18 @@ class ConsumptionPlan:
 
 @dataclass
 class CostedLine:
-    """A basket line after FIFO planning, with COGS attached."""
-    inventory_item_id: str
+    """A basket line ready to commit.
+
+    - line_type='product' has inventory_item_id, FIFO consumptions, and a
+      computed total_cogs from the lots.
+    - line_type='service' has no inventory_item_id, no consumptions, and
+      total_cogs=0 (labor has no cost basis in this MVP).
+    """
     description: str
     qty: Decimal
-    total_cogs: Decimal
+    line_type: str = "product"           # 'product' or 'service'
+    inventory_item_id: str | None = None
+    total_cogs: Decimal = Decimal("0")
     consumptions: list[ConsumptionPlan] = field(default_factory=list)
 
 
@@ -133,13 +140,18 @@ def cost_basket(
     client: Client,
     lines: list[BasketLine],
 ) -> list[CostedLine]:
-    """Compute FIFO cost basis for every line. Raises at the first short line."""
+    """Compute FIFO cost basis for every PRODUCT line. Raises at the first short line.
+
+    Use `as_service_line(description, qty)` to wrap a free-form labor/service
+    line as a CostedLine — this function is only for inventory-backed lines.
+    """
     out: list[CostedLine] = []
     for line in lines:
         plans, cogs = plan_fifo_consumption(
             client, line.inventory_item_id, line.qty, line.description
         )
         out.append(CostedLine(
+            line_type="product",
             inventory_item_id=line.inventory_item_id,
             description=line.description,
             qty=line.qty,
@@ -147,6 +159,18 @@ def cost_basket(
             consumptions=plans,
         ))
     return out
+
+
+def as_service_line(description: str, qty: Decimal) -> CostedLine:
+    """Build a service/labor CostedLine — no inventory, no COGS."""
+    return CostedLine(
+        line_type="service",
+        inventory_item_id=None,
+        description=description.strip(),
+        qty=qty,
+        total_cogs=Decimal("0"),
+        consumptions=[],
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -219,12 +243,15 @@ def commit_sale(
     order_res = client.table("sales_orders").insert(order_row).execute()
     order_id = order_res.data[0]["id"]
 
-    # 2. Lines
+    # 2. Lines — product lines reference inventory_item_id; service lines store
+    # their free-form description and have a NULL inventory_item_id.
     line_rows = [
         {
             "sales_order_id": order_id,
             "inventory_item_id": cl.inventory_item_id,
             "line_no": i + 1,
+            "line_type": cl.line_type,
+            "description": cl.description if cl.line_type == "service" else None,
             "qty": float(cl.qty),
             "unit_price_at_sale": float(line_unit_prices[i]),
             "total_cogs": float(cl.total_cogs),
@@ -233,9 +260,11 @@ def commit_sale(
     ]
     line_res = client.table("sales_order_lines").insert(line_rows).execute()
 
-    # 3. lot_consumptions
+    # 3. lot_consumptions — only product lines have consumptions
     consumption_rows = []
     for i, cl in enumerate(costed_lines):
+        if cl.line_type != "product":
+            continue
         sol_id = line_res.data[i]["id"]
         for plan in cl.consumptions:
             consumption_rows.append({
@@ -247,10 +276,11 @@ def commit_sale(
     if consumption_rows:
         client.table("lot_consumptions").insert(consumption_rows).execute()
 
-    # 4. Decrement inventory_lots
-    # Aggregate by lot in case the same lot was consumed across multiple lines.
+    # 4. Decrement inventory_lots — products only
     lot_draws: dict[str, Decimal] = {}
     for cl in costed_lines:
+        if cl.line_type != "product":
+            continue
         for plan in cl.consumptions:
             lot_draws[plan.lot_id] = lot_draws.get(plan.lot_id, Decimal("0")) + plan.qty_consumed
 
@@ -375,20 +405,26 @@ def get_sale_detail(client: Client, order_id: str) -> dict[str, Any] | None:
         .data
     )
     if lines:
-        iids = list({l["inventory_item_id"] for l in lines})
+        # Only join inventory_items for product lines
+        iids = list({l["inventory_item_id"] for l in lines if l.get("inventory_item_id")})
         items = (
             client.table("inventory_items")
             .select("id, name, sku, unit_of_measure")
             .in_("id", iids)
             .execute()
             .data
-        )
+        ) if iids else []
         by_iid = {i["id"]: i for i in items}
         for l in lines:
-            item = by_iid.get(l["inventory_item_id"], {})
-            l["item_name"]        = item.get("name", "—")
-            l["sku"]              = item.get("sku")
-            l["unit_of_measure"]  = item.get("unit_of_measure", "each")
+            if l.get("line_type", "product") == "service":
+                l["item_name"]       = l.get("description") or "Service"
+                l["sku"]             = None
+                l["unit_of_measure"] = "ea"
+            else:
+                item = by_iid.get(l["inventory_item_id"], {})
+                l["item_name"]       = item.get("name", "—")
+                l["sku"]             = item.get("sku")
+                l["unit_of_measure"] = item.get("unit_of_measure", "each")
     order["lines"] = lines
     return order
 

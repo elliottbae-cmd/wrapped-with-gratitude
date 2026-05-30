@@ -59,6 +59,18 @@ def login_form() -> None:
     """Branded, centered login card."""
     apply_style()
 
+    # Hide sidebar (including its collapse arrow) while on the login screen
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] { display: none !important; }
+        [data-testid="stSidebarCollapsedControl"] { display: none !important; }
+        section[data-testid="stSidebar"] { display: none !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         wordmark()

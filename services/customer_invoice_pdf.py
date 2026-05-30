@@ -150,10 +150,30 @@ def generate_invoice_pdf(
     story.append(Spacer(1, 0.3 * inch))
 
     # --- Line items ------------------------------------------------------
+    # Wrap descriptions in Paragraphs so long product names word-wrap to the
+    # column width instead of overflowing into Qty / Price.
+    s_cell_desc = ParagraphStyle(
+        "CellDesc",
+        parent=s_body,
+        fontName="Helvetica",
+        fontSize=10,
+        leading=13,
+        spaceBefore=0,
+        spaceAfter=0,
+    )
+
+    def _esc(s: str) -> str:
+        return (
+            (s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
     table_data = [["Description", "Qty", "Unit price", "Total"]]
     for line in lines:
         table_data.append([
-            line["description"],
+            Paragraph(_esc(line["description"]), s_cell_desc),
             f"{float(line['qty']):,.0f}",
             f"${float(line['unit_price']):,.2f}",
             f"${float(line['line_total']):,.2f}",

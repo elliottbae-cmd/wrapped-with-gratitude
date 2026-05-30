@@ -102,6 +102,26 @@ footer { visibility: hidden; }
     border-radius: 6px !important;
     background: #FFFFFF !important;
 }
+
+/* Rename the auto-generated "app" sidebar entry to "WIG Dashboard".
+   Remove the original text completely, force the anchor to left-align,
+   then inject the new label via ::after. */
+[data-testid="stSidebarNav"] ul li:first-child a span,
+[data-testid="stSidebarNav"] ul li:first-child a p {
+    display: none !important;
+}
+[data-testid="stSidebarNav"] ul li:first-child a {
+    justify-content: flex-start !important;
+    text-align: left !important;
+}
+[data-testid="stSidebarNav"] ul li:first-child a::after {
+    content: "WIG Dashboard";
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: inherit;
+    white-space: nowrap;
+}
 </style>
 """
 

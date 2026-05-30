@@ -172,11 +172,17 @@ ac1, ac2, ac3 = st.columns(3)
 
 with ac1:
     if detail["status"] == "invoiced":
+        paid_on = st.date_input(
+            "Paid on",
+            value=date.today(),
+            key=f"paid_date_{order_id}",
+            help="Date the payment actually landed — defaults to today.",
+        )
         if st.button("✅ Mark as paid", type="primary", use_container_width=True):
-            sales_svc.mark_paid(client, order_id)
+            sales_svc.mark_paid(client, order_id, paid_date=paid_on)
             _orders.clear()
             _detail.clear()
-            st.success(f"{detail['order_number']} marked paid.")
+            st.success(f"{detail['order_number']} marked paid on {paid_on}.")
             st.rerun()
     elif detail["status"] == "paid":
         st.caption(f"Paid on {detail.get('paid_date', '—')}")

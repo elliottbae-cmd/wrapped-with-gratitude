@@ -32,7 +32,9 @@ admin = is_admin()
 
 # ---- Session state init ----------------------------------------------
 if "basket" not in st.session_state:
-    st.session_state.basket = []   # list of {item_id, name, sku, category, on_hand, qty}
+    st.session_state.basket = []   # product lines: {item_id, name, sku, category, on_hand, qty}
+if "service_basket" not in st.session_state:
+    st.session_state.service_basket = []   # service lines: {description, qty, unit_price}
 if "basket_customer_id" not in st.session_state:
     st.session_state.basket_customer_id = None
 if "last_sale_result" not in st.session_state:
@@ -108,6 +110,20 @@ with st.expander("➕ Or add a new customer"):
                 st.success(f"Added {nn_name}. They're now selected.")
                 st.rerun()
 
+# Sale date — defaults to today; can backdate when entering past sales
+dc1, _ = st.columns([1, 3])
+with dc1:
+    order_date = st.date_input(
+        "Sale date",
+        value=date.today(),
+        help=(
+            "Date the sale actually happened. Affects which year the order "
+            "number is sequenced under (e.g., WG-2026-001 vs WG-2025-001) "
+            "and which period it lands in for P&L reporting."
+        ),
+        key="sale_order_date",
+    )
+
 st.divider()
 
 # ====================================================================
@@ -124,65 +140,158 @@ if not in_stock:
     st.page_link("pages/1_Upload_Invoice.py", label="📥 Upload an invoice", icon=None)
     st.stop()
 
-# --- Add line form ---
-with st.form("add_to_basket", clear_on_submit=True):
-    af1, af2, af3 = st.columns([4, 1, 1])
-    with af1:
-        in_basket_ids = {b["item_id"] for b in st.session_state.basket}
-        candidates = [i for i in in_stock if i["id"] not in in_basket_ids]
-        if not candidates:
-            st.caption("Every in-stock item is already in the basket — edit qty below or remove a line.")
-            idx = None
-        else:
-            labels = [
-                f"{i['name']}"
-                + (f" · {i['category']}" if i.get("category") else "")
-                + f" · {i['on_hand']:.0f} on hand"
-                for i in candidates
+# --- Add items: search + category filter + clickable list ---
+in_basket_ids = {b["item_id"] for b in st.session_state.basket}
+candidates_all = [i for i in in_stock if i["id"] not in in_basket_ids]
+
+if not candidates_all:
+    st.caption(
+        "Every in-stock item is already in the basket — edit qty below or remove a line."
+    )
+else:
+    with st.container(border=True):
+        st.markdown("**Add items**")
+        sc1, sc2 = st.columns([3, 1])
+        with sc1:
+            search = st.text_input(
+                "Search items",
+                placeholder="Search by name, SKU, or category…",
+                label_visibility="collapsed",
+                key="basket_search",
+            )
+        with sc2:
+            cats = sorted({
+                c.get("category", "") for c in candidates_all if c.get("category")
+            })
+            cat_options = ["All categories"] + cats
+            cat_filter = st.selectbox(
+                "Filter by category",
+                options=cat_options,
+                label_visibility="collapsed",
+                key="basket_cat_filter",
+            )
+
+        candidates = candidates_all
+        if search:
+            s = search.lower().strip()
+            candidates = [
+                c for c in candidates
+                if s in c["name"].lower()
+                or s in (c.get("sku") or "").lower()
+                or s in (c.get("category") or "").lower()
             ]
-            idx = st.selectbox(
-                "Item",
-                options=range(len(candidates)),
-                format_func=lambda i: labels[i],
+        if cat_filter != "All categories":
+            candidates = [c for c in candidates if c.get("category") == cat_filter]
+
+        if not candidates:
+            st.caption("No items match the current filters.")
+        else:
+            shown_limit = 15
+            shown = candidates[:shown_limit]
+
+            for item in shown:
+                with st.container():
+                    cols = st.columns([4, 1.2, 1])
+                    with cols[0]:
+                        st.markdown(f"**{item['name']}**")
+                        bits = []
+                        if item.get("category"):
+                            bits.append(item["category"])
+                        if item.get("sku"):
+                            bits.append(f"SKU: {item['sku']}")
+                        bits.append(f"{item['on_hand']:.0f} on hand")
+                        st.caption(" · ".join(bits))
+                    with cols[1]:
+                        qty = st.number_input(
+                            "Qty",
+                            min_value=1.0,
+                            max_value=float(item["on_hand"]),
+                            value=1.0,
+                            step=1.0,
+                            key=f"add_qty_{item['id']}",
+                            label_visibility="collapsed",
+                        )
+                    with cols[2]:
+                        if st.button(
+                            "Add",
+                            key=f"add_btn_{item['id']}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            st.session_state.basket.append({
+                                "item_id": item["id"],
+                                "name": item["name"],
+                                "sku": item.get("sku") or "",
+                                "category": item.get("category") or "",
+                                "on_hand": float(item["on_hand"]),
+                                "qty": float(qty),
+                            })
+                            st.rerun()
+
+            if len(candidates) > shown_limit:
+                st.caption(
+                    f"Showing {shown_limit} of {len(candidates)} matches — "
+                    f"refine your search or pick a category to narrow."
+                )
+            else:
+                st.caption(f"{len(candidates)} item(s).")
+
+# ---- Add a service (labor / embroidery / monogram) -------------------
+st.markdown("&nbsp;")
+with st.container(border=True):
+    st.markdown("**Add a service**")
+    st.caption("Labor lines like embroidery, monogramming, custom design. Not inventory-tracked.")
+    with st.form("add_service", clear_on_submit=True):
+        ss1, ss2, ss3, ss4 = st.columns([3, 1, 1, 1])
+        with ss1:
+            svc_desc = st.text_input(
+                "Description",
+                placeholder="e.g., Custom embroidery",
                 label_visibility="collapsed",
             )
-    with af2:
-        if idx is not None:
-            max_q = float(candidates[idx]["on_hand"])
-            new_qty = st.number_input(
+        with ss2:
+            svc_qty = st.number_input(
                 "Qty",
                 min_value=1.0,
-                max_value=max_q,
-                value=min(1.0, max_q),
+                value=1.0,
                 step=1.0,
                 label_visibility="collapsed",
             )
-        else:
-            new_qty = 0
-    with af3:
-        add_btn = st.form_submit_button(
-            "Add", type="primary", use_container_width=True, disabled=idx is None
-        )
+        with ss3:
+            svc_price = st.number_input(
+                "Unit price ($)",
+                min_value=0.0,
+                value=0.0,
+                step=1.0,
+                format="%.2f",
+                label_visibility="collapsed",
+            )
+        with ss4:
+            svc_add = st.form_submit_button("Add", type="primary", use_container_width=True)
 
-    if add_btn and idx is not None:
-        chosen = candidates[idx]
-        st.session_state.basket.append({
-            "item_id": chosen["id"],
-            "name": chosen["name"],
-            "sku": chosen.get("sku") or "",
-            "category": chosen.get("category") or "",
-            "on_hand": float(chosen["on_hand"]),
-            "qty": float(new_qty),
-        })
-        st.rerun()
+        if svc_add:
+            if not svc_desc.strip():
+                st.error("Description required.")
+            elif svc_price <= 0:
+                st.error("Unit price must be greater than 0.")
+            else:
+                st.session_state.service_basket.append({
+                    "description": svc_desc.strip(),
+                    "qty": float(svc_qty),
+                    "unit_price": float(svc_price),
+                })
+                st.rerun()
 
 # --- Basket rows ---
-if not st.session_state.basket:
-    st.info("Basket is empty. Add an item above.")
+if not st.session_state.basket and not st.session_state.service_basket:
+    st.info("Basket is empty. Add an item or service above.")
     st.stop()
 
 st.markdown("**Basket**")
-remove_idx = None
+remove_prod_idx = None
+remove_svc_idx = None
+
+# Product lines
 for i, item in enumerate(st.session_state.basket):
     # Refresh on_hand in case inventory changed between reruns
     fresh = in_stock_by_id.get(item["item_id"])
@@ -192,7 +301,7 @@ for i, item in enumerate(st.session_state.basket):
     cols = st.columns([5, 1.4, 1.4, 1])
     with cols[0]:
         st.markdown(f"**{item['name']}**")
-        sub_bits = []
+        sub_bits = ["📦 Product"]
         if item["sku"]:      sub_bits.append(f"SKU: {item['sku']}")
         if item["category"]: sub_bits.append(item["category"])
         sub_bits.append(f"{item['on_hand']:.0f} on hand")
@@ -215,15 +324,52 @@ for i, item in enumerate(st.session_state.basket):
             st.caption("✓")
     with cols[3]:
         if st.button("Remove", key=f"basket_rm_{i}_{item['item_id']}", use_container_width=True):
-            remove_idx = i
+            remove_prod_idx = i
 
-if remove_idx is not None:
-    st.session_state.basket.pop(remove_idx)
+# Service lines
+for i, svc in enumerate(st.session_state.service_basket):
+    cols = st.columns([3, 1.4, 1.4, 1.4, 1])
+    with cols[0]:
+        st.markdown(f"**{svc['description']}**")
+        st.caption("🛠 Service (no inventory)")
+    with cols[1]:
+        new_q = st.number_input(
+            "Qty",
+            min_value=1.0,
+            value=float(svc["qty"]),
+            step=1.0,
+            key=f"svc_qty_{i}_{svc['description'][:20]}",
+            label_visibility="collapsed",
+        )
+        svc["qty"] = float(new_q)
+    with cols[2]:
+        new_p = st.number_input(
+            "Unit price",
+            min_value=0.0,
+            value=float(svc["unit_price"]),
+            step=1.0,
+            format="%.2f",
+            key=f"svc_price_{i}_{svc['description'][:20]}",
+            label_visibility="collapsed",
+        )
+        svc["unit_price"] = float(new_p)
+    with cols[3]:
+        line_total = svc["qty"] * svc["unit_price"]
+        st.caption(f"= **${line_total:,.2f}**")
+    with cols[4]:
+        if st.button("Remove", key=f"svc_rm_{i}_{svc['description'][:20]}", use_container_width=True):
+            remove_svc_idx = i
+
+if remove_prod_idx is not None:
+    st.session_state.basket.pop(remove_prod_idx)
+    st.rerun()
+if remove_svc_idx is not None:
+    st.session_state.service_basket.pop(remove_svc_idx)
     st.rerun()
 
-# Pull FIFO cost for the current basket
+# Pull FIFO cost for product lines; build service lines without FIFO.
 try:
-    basket_lines = [
+    product_basket_lines = [
         sales_svc.BasketLine(
             inventory_item_id=b["item_id"],
             description=b["name"],
@@ -231,7 +377,7 @@ try:
         )
         for b in st.session_state.basket
     ]
-    costed = sales_svc.cost_basket(client, basket_lines)
+    costed_products = sales_svc.cost_basket(client, product_basket_lines) if product_basket_lines else []
 except sales_svc.InsufficientInventory as e:
     st.error(f"Not enough inventory for {e.description or e.item_id}: need {e.needed}, only {e.available} available.")
     st.stop()
@@ -239,6 +385,13 @@ except Exception as e:
     st.error(f"Could not cost the basket: {e}")
     st.stop()
 
+costed_services = [
+    sales_svc.as_service_line(s["description"], Decimal(str(s["qty"])))
+    for s in st.session_state.service_basket
+]
+
+# Unified list — order: products then services (matches how they're displayed)
+costed = costed_products + costed_services
 total_cogs = sum((c.total_cogs for c in costed), Decimal("0"))
 
 st.divider()
@@ -269,12 +422,16 @@ markup_dec = Decimal(str(markup_pct)) / Decimal("100")
 ship_dec = Decimal(str(shipping))
 tax_dec = Decimal(str(tax))
 
-# Per-line sale prices (cost × (1 + markup), then rounded)
+# Per-line sale prices:
+#   - product lines: cost-per-unit × (1 + markup %)
+#   - service lines: the customer-entered unit price (no markup applied)
 line_unit_prices: list[Decimal] = []
-for c in costed:
+for c in costed_products:
     cost_per_unit = c.total_cogs / c.qty if c.qty > 0 else Decimal("0")
     sale_per_unit = (cost_per_unit * (Decimal("1") + markup_dec)).quantize(Decimal("0.01"))
     line_unit_prices.append(sale_per_unit)
+for s in st.session_state.service_basket:
+    line_unit_prices.append(Decimal(str(s["unit_price"])).quantize(Decimal("0.01")))
 
 subtotal_price = sum(
     (line_unit_prices[i] * c.qty for i, c in enumerate(costed)),
@@ -377,6 +534,7 @@ if commit_clicked:
                 markup_pct=markup_dec,
                 shipping_charge=ship_dec,
                 sales_tax=tax_dec,
+                order_date=order_date,
                 notes=notes or None,
             )
         except Exception as e:
@@ -401,7 +559,7 @@ if commit_clicked:
                 business_phone=cfg.business_phone,
                 business_venmo=cfg.business_venmo_handle,
                 order_number=result["order_number"],
-                order_date=date.today(),
+                order_date=order_date,
                 customer_name=customer.get("name", "Customer"),
                 customer_email=customer.get("email"),
                 customer_phone=customer.get("phone"),
@@ -448,8 +606,9 @@ if commit_clicked:
 
     st.page_link("pages/4_Sales.py", label="View all sales →")
 
-    # Clear basket for the next sale
+    # Clear basket + services for the next sale
     st.session_state.basket = []
+    st.session_state.service_basket = []
     st.session_state.basket_customer_id = None
     st.session_state.last_sale_result = result
     _inventory.clear()

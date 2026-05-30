@@ -4,7 +4,8 @@ from __future__ import annotations
 import streamlit as st
 
 from config import load
-from services.inventory import count_flagged_invoices, list_flagged_invoices
+from services.inventory import list_flagged_invoices
+from services.sales import count_unpaid, sum_unpaid
 from ui.auth import get_client, is_admin, require_auth, sidebar_user_info
 from ui.style import wordmark
 
@@ -30,8 +31,17 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---- Flagged invoices banner ----
 client = get_client()
+admin = is_admin()
+
+
+# ---- Quick metrics ----
+@st.cache_data(ttl=30, show_spinner=False)
+def _metrics(_client, cache_key: str):
+    return {
+        "unpaid_count": count_unpaid(_client),
+        "unpaid_amount": sum_unpaid(_client),
+    }
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -39,7 +49,20 @@ def _flagged(_client, cache_key: str):
     return list_flagged_invoices(_client)
 
 
-flagged = _flagged(client, st.session_state["access_token"])
+cache_key = st.session_state["access_token"]
+metrics = _metrics(client, cache_key)
+
+if metrics["unpaid_count"] > 0:
+    with st.container(border=True):
+        m1, m2 = st.columns([1, 1])
+        m1.metric("Outstanding invoices", metrics["unpaid_count"])
+        m2.metric("Amount owed to you", f"${metrics['unpaid_amount']:,.2f}")
+        st.page_link("pages/4_Sales.py", label="Review unpaid orders →")
+    st.markdown("&nbsp;")
+
+
+# ---- Flagged invoices banner ----
+flagged = _flagged(client, cache_key)
 if flagged:
     with st.container(border=True):
         st.markdown(
@@ -59,9 +82,11 @@ if flagged:
             st.caption(f"…and {len(flagged) - 5} more.")
     st.markdown("&nbsp;")
 
-c1, c2 = st.columns(2, gap="medium")
 
-with c1:
+# ---- Primary nav (2x2 grid) ----
+r1c1, r1c2 = st.columns(2, gap="medium")
+
+with r1c1:
     with st.container(border=True):
         st.markdown("### Upload an invoice")
         st.caption(
@@ -70,14 +95,33 @@ with c1:
         )
         st.page_link("pages/1_Upload_Invoice.py", label="Open uploader →")
 
-with c2:
+with r1c2:
     with st.container(border=True):
-        st.markdown("### View inventory")
+        st.markdown("### New sale")
         st.caption(
-            "Browse on-hand quantities, lot history, and landed cost — "
-            "FIFO across receipts."
+            "Build a basket from inventory, set a markup, and generate a "
+            "Venmo-ready PDF invoice."
+        )
+        st.page_link("pages/3_New_Sale.py", label="Start a sale →")
+
+r2c1, r2c2 = st.columns(2, gap="medium")
+
+with r2c1:
+    with st.container(border=True):
+        st.markdown("### Inventory")
+        st.caption(
+            "Browse on-hand qty, lot history, and landed cost — FIFO across receipts."
         )
         st.page_link("pages/2_Inventory.py", label="Open inventory →")
+
+with r2c2:
+    with st.container(border=True):
+        st.markdown("### Sales & customers")
+        st.caption(
+            "Past sales, mark-paid, customer directory and order history."
+        )
+        st.page_link("pages/4_Sales.py", label="View sales →")
+        st.page_link("pages/5_Customers.py", label="Customer directory →")
 
 st.markdown("&nbsp;")
 
@@ -85,8 +129,7 @@ st.markdown("&nbsp;")
 with st.container(border=True):
     st.markdown("##### Coming next")
     st.caption(
-        "• Sales basket builder with markup and PDF customer invoices  \n"
         "• Balance sheet & P&L reports (admin)  \n"
-        "• Customer email campaigns  \n"
-        "• Instagram integration"
+        "• Customer email campaigns (SendGrid)  \n"
+        "• Instagram integration (DMs + auto captions)"
     )

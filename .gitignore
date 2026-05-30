@@ -16,6 +16,7 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Streamlit
 .streamlit/secrets.toml

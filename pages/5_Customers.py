@@ -10,7 +10,6 @@ from ui.auth import get_client, require_auth, sidebar_user_info
 
 st.set_page_config(page_title="Customers", page_icon="👥", layout="wide")
 require_auth()
-sidebar_user_info()
 
 st.title("👥 Customers")
 

@@ -7,3 +7,5 @@ pandas>=2.2.0
 pypdf>=5.1.0
 pillow>=11.0.0
 reportlab>=4.2.0
+replicate>=1.0.0
+requests>=2.31.0

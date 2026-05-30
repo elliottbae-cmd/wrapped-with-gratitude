@@ -1,13 +1,25 @@
-"""Home dashboard."""
+"""Streamlit entry — page config, auth gate, sidebar navigation with groups.
+
+Sidebar layout:
+  WIG Dashboard        ← default home page
+  Operations           (collapsible)
+    · Upload Invoice
+    · Inventory
+    · New Sale
+    · Sales
+    · Customers
+  Accounting           (collapsible)
+    · Reports
+    · Expenses
+  Marketing            (collapsible)
+    · Marketing
+"""
 from __future__ import annotations
 
 import streamlit as st
 
 from config import load
-from services.inventory import list_flagged_invoices
-from services.sales import count_unpaid, sum_unpaid
-from ui.auth import get_client, is_admin, require_auth, sidebar_user_info
-from ui.style import wordmark
+from ui.auth import require_auth, sidebar_user_info
 
 
 cfg = load()
@@ -19,128 +31,34 @@ st.set_page_config(
     initial_sidebar_state="auto",
 )
 
+# Auth gate runs once at the navigation entry — pages don't need to repeat it.
 require_auth()
+
+# Page tree — dict keys become section headers. The empty string "" group
+# renders without a header so the home page sits at the top of the sidebar.
+pages = {
+    "": [
+        st.Page("home_page.py", title="WIG Dashboard", icon="🎁", default=True),
+    ],
+    "Operations": [
+        st.Page("pages/1_Upload_Invoice.py", title="Upload Invoice", icon="📥"),
+        st.Page("pages/2_Inventory.py",      title="Inventory",      icon="📦"),
+        st.Page("pages/3_New_Sale.py",       title="New Sale",       icon="🛒"),
+        st.Page("pages/4_Sales.py",          title="Sales",          icon="💸"),
+        st.Page("pages/5_Customers.py",      title="Customers",      icon="👥"),
+    ],
+    "Accounting": [
+        st.Page("pages/6_Reports.py",  title="Reports",  icon="📊"),
+        st.Page("pages/8_Expenses.py", title="Expenses", icon="💳"),
+    ],
+    "Marketing": [
+        st.Page("pages/7_Marketing.py", title="Marketing", icon="📣"),
+    ],
+}
+
+pg = st.navigation(pages, position="sidebar", expanded=True)
+
+# Add the user info + sign-out below the nav — runs once per rerun.
 sidebar_user_info()
 
-wordmark()
-
-st.markdown(
-    f'<p class="wg-caption" style="margin-top:-1.5rem; margin-bottom:2.5rem;">'
-    f'Welcome back, {st.session_state["user_email"].split("@")[0]}'
-    f'</p>',
-    unsafe_allow_html=True,
-)
-
-client = get_client()
-admin = is_admin()
-
-
-# ---- Quick metrics ----
-@st.cache_data(ttl=30, show_spinner=False)
-def _metrics(_client, cache_key: str):
-    return {
-        "unpaid_count": count_unpaid(_client),
-        "unpaid_amount": sum_unpaid(_client),
-    }
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def _flagged(_client, cache_key: str):
-    return list_flagged_invoices(_client)
-
-
-cache_key = st.session_state["access_token"]
-metrics = _metrics(client, cache_key)
-
-if metrics["unpaid_count"] > 0:
-    with st.container(border=True):
-        m1, m2 = st.columns([1, 1])
-        m1.metric("Outstanding invoices", metrics["unpaid_count"])
-        m2.metric("Amount owed to you", f"${metrics['unpaid_amount']:,.2f}")
-        st.page_link("pages/4_Sales.py", label="Review unpaid orders →")
-    st.markdown("&nbsp;")
-
-
-# ---- Flagged invoices banner ----
-flagged = _flagged(client, cache_key)
-if flagged:
-    with st.container(border=True):
-        st.markdown(
-            f"##### ⚠ {len(flagged)} invoice(s) posted with math discrepancies"
-        )
-        st.caption(
-            "These were committed via the override checkbox — review and reconcile when you have time."
-        )
-        for inv in flagged[:5]:
-            inv_num = inv.get("invoice_number") or "(no #)"
-            st.markdown(
-                f"- **{inv['vendor_name']}** · {inv_num} · "
-                f"{inv['invoice_date']} · ${float(inv['total']):,.2f}  \n"
-                f"  &nbsp;&nbsp;_{inv.get('discrepancy_detail') or 'no detail recorded'}_"
-            )
-        if len(flagged) > 5:
-            st.caption(f"…and {len(flagged) - 5} more.")
-    st.markdown("&nbsp;")
-
-
-# ---- Primary nav (2x2 grid) ----
-r1c1, r1c2 = st.columns(2, gap="medium")
-
-with r1c1:
-    with st.container(border=True):
-        st.markdown("### Upload an invoice")
-        st.caption(
-            "Drop a vendor PDF or photo. Claude reads the line items and "
-            "lands the cost across your inventory."
-        )
-        st.page_link("pages/1_Upload_Invoice.py", label="Open uploader →")
-
-with r1c2:
-    with st.container(border=True):
-        st.markdown("### New sale")
-        st.caption(
-            "Build a basket from inventory, set a markup, and generate a "
-            "Venmo-ready PDF invoice."
-        )
-        st.page_link("pages/3_New_Sale.py", label="Start a sale →")
-
-r2c1, r2c2 = st.columns(2, gap="medium")
-
-with r2c1:
-    with st.container(border=True):
-        st.markdown("### Inventory")
-        st.caption(
-            "Browse on-hand qty, lot history, and landed cost — FIFO across receipts."
-        )
-        st.page_link("pages/2_Inventory.py", label="Open inventory →")
-
-with r2c2:
-    with st.container(border=True):
-        st.markdown("### Sales & customers")
-        st.caption(
-            "Past sales, mark-paid, customer directory and order history."
-        )
-        st.page_link("pages/4_Sales.py", label="View sales →")
-        st.page_link("pages/5_Customers.py", label="Customer directory →")
-
-st.markdown("&nbsp;")
-
-# ---- Admin: Reports card ----
-if admin:
-    with st.container(border=True):
-        st.markdown("### 📊 Reports")
-        st.caption(
-            "P&L, balance sheet, cash flow, and top-selling items — "
-            "filtered by period (this month, QTD, YTD, custom)."
-        )
-        st.page_link("pages/6_Reports.py", label="Open reports →")
-    st.markdown("&nbsp;")
-
-# Coming-soon panel
-with st.container(border=True):
-    st.markdown("##### Coming next")
-    st.caption(
-        "• Customer email campaigns (SendGrid)  \n"
-        "• Instagram integration (DMs + auto captions)  \n"
-        "• Vendor AP tracking (to sharpen the cash picture)"
-    )
+pg.run()

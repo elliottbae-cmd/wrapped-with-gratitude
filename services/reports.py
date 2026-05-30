@@ -1,5 +1,10 @@
 """Period reporting — P&L, Balance Sheet, and a simple cash flow summary.
 
+Now includes operating expenses (operating_expenses table) so:
+  - P&L: Gross Profit − Operating Expenses = Net Income
+  - BS:  Cash = customer collections − operating expenses paid
+  - CF:  expenses show as an operating cash outflow alongside inventory.
+
 No new schema required. Everything comes from invoices, sales_orders,
 sales_order_lines, inventory_lots.
 
@@ -22,6 +27,8 @@ from typing import Any
 
 from supabase import Client
 
+from services import expenses as exp_svc
+
 
 @dataclass
 class PLResult:
@@ -36,6 +43,10 @@ class PLResult:
     gross_profit: float
     gross_margin_pct: float
     avg_order_value: float
+    operating_expenses: float
+    expenses_by_category: dict[str, float]
+    net_income: float
+    net_margin_pct: float
 
 
 def pl_for_period(
@@ -65,6 +76,12 @@ def pl_for_period(
     gm        = (gross / revenue * 100) if revenue > 0 else 0.0
     aov       = (revenue / len(orders))  if orders     else 0.0
 
+    # Operating expenses — same period boundaries (uses expense_date).
+    opex_total = exp_svc.sum_in_period(client, start_date, end_date)
+    opex_by_cat = exp_svc.by_category_in_period(client, start_date, end_date)
+    net_income = gross - opex_total
+    net_margin = (net_income / revenue * 100) if revenue > 0 else 0.0
+
     return PLResult(
         basis=basis,
         start_date=start_date,
@@ -77,6 +94,10 @@ def pl_for_period(
         gross_profit=gross,
         gross_margin_pct=gm,
         avg_order_value=aov,
+        operating_expenses=opex_total,
+        expenses_by_category=opex_by_cat,
+        net_income=net_income,
+        net_margin_pct=net_margin,
     )
 
 
@@ -148,9 +169,16 @@ def bs_as_of(client: Client, as_of: date) -> BSResult:
         .data
         or []
     )
-    cash = sum(float(r["total"]) for r in paid_rows)
+    collected = sum(float(r["total"]) for r in paid_rows)
 
-    # --- Capital contribution: owner-funded inventory purchases to date ----
+    # --- Operating expenses to date (owner-funded — see capital below) ----
+    opex_total = exp_svc.sum_to_date(client, as_of)
+
+    # --- Cash = customer collections (no expense reduction; opex is owner-funded
+    #     and offset dollar-for-dollar by a capital contribution) ----
+    cash = collected
+
+    # --- Capital contribution: owner-funded inventory purchases + opex ----
     purch_rows = (
         client.table("invoices")
         .select("total")
@@ -159,7 +187,8 @@ def bs_as_of(client: Client, as_of: date) -> BSResult:
         .data
         or []
     )
-    capital = sum(float(r["total"]) for r in purch_rows)
+    inventory_purchases_total = sum(float(r["total"]) for r in purch_rows)
+    capital = inventory_purchases_total + opex_total
 
     total_assets = inventory_value + ar + cash
     retained = total_assets - capital
@@ -184,11 +213,23 @@ def bs_as_of(client: Client, as_of: date) -> BSResult:
 class CashFlowResult:
     start_date: date
     end_date: date
-    cash_in: float                   # customer payments received in period
-    cash_out: float                  # vendor invoices received in period (assumed paid)
-    net_change: float
+    # Operating
+    cash_in: float                       # customer payments received in period
+    inventory_purchases: float           # vendor invoices received in period (assumed paid)
+    operating_expenses: float            # ops expenses in the period (assumed paid)
+    net_operating: float                 # cash_in − (inventory_purchases + operating_expenses)
+    # Financing
+    capital_contribution: float          # owner-funded inventory purchases for this period
+    # Roll-up
+    net_change: float                    # net_operating + capital_contribution
     payment_count: int
     purchase_count: int
+    expense_count: int
+
+    # Legacy field for backward-compat with templates expecting `cash_out`
+    @property
+    def cash_out(self) -> float:
+        return self.inventory_purchases + self.operating_expenses
 
 
 def cash_flow_for_period(
@@ -196,7 +237,14 @@ def cash_flow_for_period(
     start_date: date,
     end_date: date,
 ) -> CashFlowResult:
-    """Simple cash flow: payments collected vs. vendor invoices received."""
+    """Cash flow with three sections:
+
+    - Operating: customer payments in, inventory purchases out
+    - Financing: owner contributions (assumed to fund the inventory purchases
+      dollar-for-dollar in this MVP)
+    - Net change = Operating + Financing (= customer payments, since the
+      contribution exactly offsets purchases in this model)
+    """
     start_iso, end_iso = start_date.isoformat(), end_date.isoformat()
 
     paid = (
@@ -220,16 +268,37 @@ def cash_flow_for_period(
         .data
         or []
     )
-    cash_out = sum(float(r["total"]) for r in purch)
+    inventory_purchases = sum(float(r["total"]) for r in purch)
+
+    exp_rows = (
+        client.table("operating_expenses")
+        .select("amount")
+        .gte("expense_date", start_iso)
+        .lte("expense_date", end_iso)
+        .execute()
+        .data
+        or []
+    )
+    operating_expenses = sum(float(r["amount"]) for r in exp_rows)
+
+    net_operating = cash_in - inventory_purchases - operating_expenses
+    # Owner funds BOTH inventory purchases AND operating expenses — keeps
+    # business cash equal to actual collections.
+    capital = inventory_purchases + operating_expenses
+    net_change = net_operating + capital   # works out to cash_in
 
     return CashFlowResult(
         start_date=start_date,
         end_date=end_date,
         cash_in=cash_in,
-        cash_out=cash_out,
-        net_change=cash_in - cash_out,
+        inventory_purchases=inventory_purchases,
+        operating_expenses=operating_expenses,
+        net_operating=net_operating,
+        capital_contribution=capital,
+        net_change=net_change,
         payment_count=len(paid),
         purchase_count=len(purch),
+        expense_count=len(exp_rows),
     )
 
 

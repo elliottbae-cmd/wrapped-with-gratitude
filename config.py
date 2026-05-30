@@ -57,6 +57,7 @@ class Config:
     sendgrid_from_email: str
     instagram_access_token: str
     instagram_business_account_id: str
+    replicate_api_token: str
 
 
 def load() -> Config:
@@ -73,4 +74,5 @@ def load() -> Config:
         sendgrid_from_email=_read("SENDGRID_FROM_EMAIL"),
         instagram_access_token=_read("INSTAGRAM_ACCESS_TOKEN"),
         instagram_business_account_id=_read("INSTAGRAM_BUSINESS_ACCOUNT_ID"),
+        replicate_api_token=_read("REPLICATE_API_TOKEN"),
     )

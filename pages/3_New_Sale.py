@@ -18,7 +18,6 @@ from ui.auth import get_client, is_admin, require_auth, sidebar_user_info
 cfg = load()
 st.set_page_config(page_title="New Sale", page_icon="🛒", layout="wide")
 require_auth()
-sidebar_user_info()
 
 st.title("🛒 New Sale")
 st.caption(

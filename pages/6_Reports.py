@@ -21,7 +21,6 @@ from ui.auth import get_client, require_admin, sidebar_user_info
 cfg = load()
 st.set_page_config(page_title="Reports", page_icon="📊", layout="wide")
 require_admin()
-sidebar_user_info()
 
 st.title("📊 Reports")
 st.caption("Admin-only views of revenue, costs, cash, and balance sheet.")
@@ -105,17 +104,29 @@ pm2.metric("COGS", f"${pl.cogs:,.2f}")
 pm3.metric("Gross profit", f"${pl.gross_profit:,.2f}")
 pm4.metric("Gross margin", f"{pl.gross_margin_pct:.1f}%")
 
+# Operating expenses + net income
 pm5, pm6, pm7, pm8 = st.columns(4)
-pm5.metric("Orders", pl.order_count)
-pm6.metric("Avg order value", f"${pl.avg_order_value:,.2f}")
-pm7.metric("Shipping collected", f"${pl.shipping_collected:,.2f}",
-           help="Pass-through, not P&L revenue.")
-pm8.metric("Sales tax collected", f"${pl.tax_collected:,.2f}",
-           help="Owed to the state, not revenue.")
+pm5.metric("Operating expenses", f"${pl.operating_expenses:,.2f}",
+           help="From the Operating Expenses page (expense_date in this period).")
+pm6.metric("Net income", f"${pl.net_income:,.2f}",
+           delta=("profit" if pl.net_income >= 0 else "loss"),
+           delta_color=("normal" if pl.net_income >= 0 else "inverse"))
+pm7.metric("Net margin", f"{pl.net_margin_pct:.1f}%")
+pm8.metric("Orders", pl.order_count)
 
-st.caption(
-    "Note: this MVP has no operating expense module yet — gross profit equals net income."
-)
+pm9, pm10, pm11, pm12 = st.columns(4)
+pm9.metric("Avg order value", f"${pl.avg_order_value:,.2f}")
+pm10.metric("Shipping collected", f"${pl.shipping_collected:,.2f}",
+            help="Pass-through, not P&L revenue.")
+pm11.metric("Sales tax collected", f"${pl.tax_collected:,.2f}",
+            help="Owed to the state, not revenue.")
+# pm12 intentionally blank to keep grid alignment
+
+# Expense breakdown (collapsed)
+if pl.expenses_by_category:
+    with st.expander(f"Operating expense breakdown ({len(pl.expenses_by_category)} categories)"):
+        for cat, amt in pl.expenses_by_category.items():
+            st.markdown(f"- **{cat}**: ${amt:,.2f}")
 
 st.divider()
 
@@ -150,19 +161,62 @@ st.divider()
 st.subheader("Cash flow")
 cf = _cf(client, start_iso, end_iso, cache_key)
 
-cm1, cm2, cm3 = st.columns(3)
-cm1.metric("Payments collected", f"${cf.cash_in:,.2f}", delta=f"{cf.payment_count} payments", delta_color="off")
-cm2.metric("Inventory purchases", f"${cf.cash_out:,.2f}", delta=f"{cf.purchase_count} invoices", delta_color="off")
-cm3.metric(
-    "Net cash change",
+owner = cfg.business_owner_name or "Owner"
+
+# Operating activities ----------------------------------------------------
+st.markdown("**Operating activities**")
+op1, op2, op3, op4 = st.columns(4)
+op1.metric(
+    "Customer payments in",
+    f"${cf.cash_in:,.2f}",
+    delta=f"{cf.payment_count} payments",
+    delta_color="off",
+)
+op2.metric(
+    "Inventory purchases out",
+    f"${cf.inventory_purchases:,.2f}",
+    delta=f"{cf.purchase_count} invoices",
+    delta_color="off",
+)
+op3.metric(
+    "Operating expenses out",
+    f"${cf.operating_expenses:,.2f}",
+    delta=f"{cf.expense_count} expenses",
+    delta_color="off",
+)
+op4.metric(
+    "Net from operations",
+    f"${cf.net_operating:,.2f}",
+    delta=("self-funding" if cf.net_operating >= 0 else "needs financing"),
+    delta_color=("normal" if cf.net_operating >= 0 else "inverse"),
+)
+
+# Financing activities ----------------------------------------------------
+st.markdown("&nbsp;")
+st.markdown("**Financing activities**")
+fc1, fc2, fc3 = st.columns(3)
+fc1.metric(
+    f"Owner contributions — {owner}",
+    f"${cf.capital_contribution:,.2f}",
+    delta="funded inventory purchases",
+    delta_color="off",
+)
+fc2.metric(
+    "Net from financing",
+    f"${cf.capital_contribution:,.2f}",
+)
+fc3.metric(
+    "Net cash change (operating + financing)",
     f"${cf.net_change:,.2f}",
-    delta="positive" if cf.net_change >= 0 else "negative",
-    delta_color="normal" if cf.net_change >= 0 else "inverse",
+    delta=("positive" if cf.net_change >= 0 else "negative"),
+    delta_color=("normal" if cf.net_change >= 0 else "inverse"),
 )
 
 st.caption(
-    "Assumes you paid each vendor invoice at receipt. "
-    "Once we track vendor AP (Phase 3.5 maybe), this becomes the true cash picture."
+    "Owner funds both inventory purchases and operating expenses via capital "
+    "contribution — so the cash position equals customer payments collected. "
+    "The capital contribution on the financing side offsets these outflows "
+    "dollar-for-dollar."
 )
 
 st.divider()
@@ -205,7 +259,7 @@ with ac1:
             f"<span style='float:right'>${bs.cash:,.2f}</span>",
             unsafe_allow_html=True,
         )
-        st.caption("Customer payments collected to date")
+        st.caption("Customer collections (opex offset by owner contribution)")
     st.metric("Total assets", f"${bs.total_assets:,.2f}")
 
 with ac2:
@@ -223,7 +277,7 @@ with ac2:
             f"<span style='float:right'>${bs.capital_contribution:,.2f}</span>",
             unsafe_allow_html=True,
         )
-        st.caption("Owner-funded inventory purchases to date")
+        st.caption("Owner-funded inventory purchases + operating expenses to date")
     with st.container(border=True):
         st.markdown(
             f"**Retained earnings** &nbsp;&nbsp; "

@@ -12,7 +12,6 @@ from ui.auth import get_client, is_admin, require_auth, sidebar_user_info
 
 st.set_page_config(page_title="Sales", page_icon="💸", layout="wide")
 require_auth()
-sidebar_user_info()
 
 st.title("💸 Sales")
 

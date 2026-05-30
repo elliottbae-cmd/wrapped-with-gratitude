@@ -13,7 +13,6 @@ cfg = load()
 
 st.set_page_config(page_title="Upload Invoice", page_icon="📥", layout="wide")
 require_auth()
-sidebar_user_info()
 
 st.title("📥 Upload Invoice")
 st.caption(

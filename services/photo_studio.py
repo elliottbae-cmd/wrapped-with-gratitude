@@ -26,20 +26,47 @@ from supabase import Client
 
 # --------------------------------------------------------------------------
 # Replicate model — swap if this version is retired.
+# Browse alternatives at https://replicate.com/explore?query=background+removal
 # --------------------------------------------------------------------------
-BG_REMOVAL_MODEL = "851-labs/background-remover"
+BG_REMOVAL_MODEL = "fottoai/remove-bg-2:d748bcc6882e5567ffe1468356323e6345736494dd9b827ff2871a68fca79be5"
+# Replicate input field for this model — see https://replicate.com/fottoai/remove-bg-2/schema
+BG_REMOVAL_INPUT_FIELD = "image_url"
 
 
 # --------------------------------------------------------------------------
-# Brand backdrops (gradients generated programmatically — no asset files)
+# Brand backdrops — all generated programmatically (no asset files).
+# Mix of vertical gradients, radial spotlights, and textured variants.
 # --------------------------------------------------------------------------
-BACKDROP_PALETTES: dict[str, tuple[str, str]] = {
-    "cream":   ("#FBF7F4", "#F5EBE6"),  # warm cream → soft blush
-    "blush":   ("#F5EBE6", "#E5C8C0"),  # soft blush → dusty rose
-    "sage":    ("#EFF1EB", "#C8D0BD"),  # cool cream → sage
-    "marble":  ("#FFFFFF", "#F2F2F2"),  # white → barely-grey
-    "linen":   ("#F4ECDF", "#E8DCC4"),  # linen → wheat
-    "charcoal":("#3A332F", "#2C2826"),  # deep, moody
+import numpy as np  # already in deps via pandas
+
+
+# Each entry: (kind, color1, color2)
+#   kind = "vertical" — top → bottom linear gradient
+#   kind = "radial"   — bright center → darker edges
+#   kind = "paper"    — vertical gradient + fine noise texture
+#   kind = "vignette" — center color → very dark edges
+BACKDROP_PALETTES: dict[str, tuple[str, str, str]] = {
+    # Solid gradients
+    "cream":            ("vertical", "#FBF7F4", "#F5EBE6"),
+    "blush":            ("vertical", "#F5EBE6", "#E5C8C0"),
+    "sage":             ("vertical", "#EFF1EB", "#C8D0BD"),
+    "marble":           ("vertical", "#FFFFFF", "#F2F2F2"),
+    "linen":            ("vertical", "#F4ECDF", "#E8DCC4"),
+    "charcoal":         ("vertical", "#3A332F", "#2C2826"),
+
+    # Radial spotlights — bright center, soft falloff
+    "spotlight_cream":  ("radial",   "#FFFFFF", "#E5D7CB"),
+    "spotlight_blush":  ("radial",   "#FFEDE6", "#C8A6A1"),
+    "sunset":           ("radial",   "#FFE0BD", "#E69282"),
+    "studio_grey":      ("radial",   "#FFFFFF", "#BFBFBF"),
+
+    # Textured paper — gradient + noise grain
+    "vintage_paper":    ("paper",    "#F2E8D7", "#E8DCC4"),
+    "modern_paper":     ("paper",    "#FAFAFA", "#EDEDED"),
+
+    # Vignettes — moody, photo-studio look
+    "moody_vignette":   ("vignette", "#3A332F", "#1A1614"),
+    "champagne":        ("vignette", "#E8D7B8", "#7A6849"),
 }
 
 
@@ -47,9 +74,7 @@ def _hex_to_rgb(h: str) -> tuple[int, int, int]:
     return tuple(int(h[i:i+2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
 
 
-def make_backdrop(width: int, height: int, palette: str = "cream") -> Image.Image:
-    """Vertical gradient backdrop, RGB."""
-    top_hex, bot_hex = BACKDROP_PALETTES.get(palette, BACKDROP_PALETTES["cream"])
+def _vertical_gradient(width: int, height: int, top_hex: str, bot_hex: str) -> Image.Image:
     top, bot = _hex_to_rgb(top_hex), _hex_to_rgb(bot_hex)
     img = Image.new("RGB", (width, height))
     draw = ImageDraw.Draw(img)
@@ -61,6 +86,76 @@ def make_backdrop(width: int, height: int, palette: str = "cream") -> Image.Imag
         b = int(top[2] * (1 - t) + bot[2] * t)
         draw.line([(0, y), (width, y)], fill=(r, g, b))
     return img
+
+
+def _radial_gradient(
+    width: int,
+    height: int,
+    inner_hex: str,
+    outer_hex: str,
+    *,
+    focal_offset_y: float = -0.08,
+) -> Image.Image:
+    """Radial gradient with a slightly above-center focal point (more flattering)."""
+    inner = np.array(_hex_to_rgb(inner_hex), dtype=np.float32)
+    outer = np.array(_hex_to_rgb(outer_hex), dtype=np.float32)
+
+    cx = width / 2
+    cy = height / 2 + height * focal_offset_y
+    # Max distance from focal point to a corner
+    max_r = float(np.hypot(max(cx, width - cx), max(cy, height - cy)))
+
+    yy, xx = np.indices((height, width), dtype=np.float32)
+    dist = np.hypot(xx - cx, yy - cy) / max_r        # 0 at center, ~1 at edges
+    # Smooth easing so the spotlight isn't too harsh
+    t = np.clip(dist, 0.0, 1.0)
+    t = t * t * (3.0 - 2.0 * t)  # smoothstep
+    t = t[..., None]                                   # broadcast across RGB
+
+    arr = (inner * (1 - t) + outer * t).astype(np.uint8)
+    return Image.fromarray(arr, "RGB")
+
+
+def _vignette(
+    width: int,
+    height: int,
+    inner_hex: str,
+    outer_hex: str,
+) -> Image.Image:
+    """Like radial but with stronger edge darkening — moody photo-studio feel."""
+    return _radial_gradient(width, height, inner_hex, outer_hex, focal_offset_y=0.0)
+
+
+def _paper_texture(
+    width: int,
+    height: int,
+    top_hex: str,
+    bot_hex: str,
+    *,
+    noise_strength: int = 8,
+) -> Image.Image:
+    """Vertical gradient with subtle film-grain noise overlaid."""
+    base = _vertical_gradient(width, height, top_hex, bot_hex)
+    arr = np.asarray(base, dtype=np.int16)
+    rng = np.random.default_rng(seed=42)            # deterministic look
+    noise = rng.integers(-noise_strength, noise_strength + 1, arr.shape, dtype=np.int16)
+    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
+    return Image.fromarray(arr, "RGB")
+
+
+def make_backdrop(width: int, height: int, palette: str = "cream") -> Image.Image:
+    """Build a backdrop for the chosen palette name."""
+    spec = BACKDROP_PALETTES.get(palette) or BACKDROP_PALETTES["cream"]
+    kind, c1, c2 = spec
+    if kind == "vertical":
+        return _vertical_gradient(width, height, c1, c2)
+    if kind == "radial":
+        return _radial_gradient(width, height, c1, c2)
+    if kind == "vignette":
+        return _vignette(width, height, c1, c2)
+    if kind == "paper":
+        return _paper_texture(width, height, c1, c2)
+    return _vertical_gradient(width, height, c1, c2)
 
 
 def add_drop_shadow(
@@ -142,7 +237,7 @@ def remove_background(image_bytes: bytes, mime_type: str, api_token: str) -> byt
     data_uri = f"data:{mime_type};base64,{b64}"
 
     try:
-        output = client.run(BG_REMOVAL_MODEL, input={"image": data_uri})
+        output = client.run(BG_REMOVAL_MODEL, input={BG_REMOVAL_INPUT_FIELD: data_uri})
     except Exception as e:
         raise RuntimeError(
             f"Replicate model `{BG_REMOVAL_MODEL}` failed: {e}. "
